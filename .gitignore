@@ -1,0 +1,13 @@
+# Local temp/config artifacts
+.tmpcfg/
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Editor/IDE settings
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
