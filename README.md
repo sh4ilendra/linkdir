@@ -2,13 +2,7 @@
 
 `linkdir` is a lightweight Bash bookmark utility for storing and opening shortcuts to URLs, directories, and shell commands.
 
-Mappings are stored as:
-
-```text
-key|value
-```
-
-in:
+Mappings are stored in a local SQLite database at:
 
 ```text
 ~/.config/linkdir/links.db
@@ -22,14 +16,15 @@ in:
 - Open URL mappings with `xdg-open` in background
 - Detect directory mappings and print resolved path
 - Execute command mappings
-- Atomic persistence writes
+- Transactional SQLite persistence
 - Optional fuzzy open with `fzf`
 - Bash completion for commands and stored keys
 
 ## Requirements
 
 - Bash 4+
-- Common CLI tools (`awk`, `grep`, `sed`, `cut`)
+- `sqlite3`
+- Common CLI tools (`awk`, `sed`)
 - Optional: `column`, `fzf`, `xdg-open`
 
 ## Installation
@@ -126,3 +121,4 @@ To load on every shell startup, add that line to `.bashrc`.
 - Keys allow: letters, numbers, `.`, `_`, `-`
 - Re-adding an existing key overwrites it safely
 - `linkdir f` requires `fzf`; otherwise a friendly message is shown
+- Existing legacy `key|value` files are migrated automatically on first run (a timestamped `.bak` backup is kept)

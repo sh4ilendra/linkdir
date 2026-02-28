@@ -4,6 +4,7 @@ set -euo pipefail
 PROGRAM="linkdir"
 CONFIG_DIR="${XDG_CONFIG_HOME:-$HOME/.config}/linkdir"
 DB_FILE="$CONFIG_DIR/links.db"
+SQLITE_HEADER="SQLite format 3"
 
 COLOR_ENABLED=0
 if [[ -t 1 ]]; then
@@ -63,7 +64,122 @@ EOF
 
 ensure_store() {
   mkdir -p "$CONFIG_DIR"
-  touch "$DB_FILE"
+}
+
+require_sqlite() {
+  if ! command -v sqlite3 >/dev/null 2>&1; then
+    error "sqlite3 is required but not found in PATH."
+    return 1
+  fi
+}
+
+sql_escape() {
+  local raw="$1"
+  printf '%s' "$raw" | sed "s/'/''/g"
+}
+
+is_sqlite_file() {
+  [[ -s "$DB_FILE" ]] || return 1
+  local header
+  # SQLite databases start with this fixed 15-byte magic header.
+  header="$(head -c 15 "$DB_FILE" 2>/dev/null || true)"
+  [[ "$header" == "$SQLITE_HEADER" ]]
+}
+
+init_schema() {
+  if ! sqlite3 "$DB_FILE" <<'SQL'
+CREATE TABLE IF NOT EXISTS mappings (
+  key TEXT PRIMARY KEY,
+  value TEXT NOT NULL,
+  created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+SQL
+  then
+    error "Failed to initialize SQLite schema at: $DB_FILE"
+    return 1
+  fi
+}
+
+migrate_legacy_db() {
+  [[ -s "$DB_FILE" ]] || return 0
+  if is_sqlite_file; then
+    return 0
+  fi
+
+  # Migrate into a temporary SQLite DB first, then swap files only on success.
+  local tmp backup line line_no key value skey svalue
+  tmp="$(mktemp "$CONFIG_DIR/.links.db.sqlite.tmp.XXXXXX")"
+  backup="$DB_FILE.legacy.$(date +%Y%m%d%H%M%S).bak"
+
+  if ! sqlite3 "$tmp" <<'SQL'
+CREATE TABLE IF NOT EXISTS mappings (
+  key TEXT PRIMARY KEY,
+  value TEXT NOT NULL,
+  created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+SQL
+  then
+    rm -f "$tmp"
+    error "Failed to prepare temporary SQLite database for migration."
+    return 1
+  fi
+
+  line_no=0
+  while IFS= read -r line || [[ -n "$line" ]]; do
+    ((line_no += 1))
+    [[ -z "$line" ]] && continue
+
+    if [[ "$line" != *"|"* ]]; then
+      rm -f "$tmp"
+      error "Legacy DB migration failed: missing delimiter on line $line_no."
+      return 1
+    fi
+
+    key="${line%%|*}"
+    value="${line#*|}"
+    if [[ -z "$key" ]]; then
+      rm -f "$tmp"
+      error "Legacy DB migration failed: empty key on line $line_no."
+      return 1
+    fi
+    if ! validate_key "$key"; then
+      rm -f "$tmp"
+      error "Legacy DB migration failed: invalid key on line $line_no."
+      return 1
+    fi
+
+    skey="$(sql_escape "$key")"
+    svalue="$(sql_escape "$value")"
+    if ! sqlite3 "$tmp" "INSERT INTO mappings (key, value) VALUES ('$skey', '$svalue') ON CONFLICT(key) DO UPDATE SET value=excluded.value, updated_at=CURRENT_TIMESTAMP;"; then
+      rm -f "$tmp"
+      error "Legacy DB migration failed while inserting line $line_no."
+      return 1
+    fi
+  done <"$DB_FILE"
+
+  if ! mv "$DB_FILE" "$backup"; then
+    rm -f "$tmp"
+    error "Migration failed: could not create backup at $backup"
+    return 1
+  fi
+
+  if ! mv "$tmp" "$DB_FILE"; then
+    error "Migration failed: could not place SQLite DB at $DB_FILE"
+    error "Backup is preserved at: $backup"
+    return 1
+  fi
+
+  success "Migrated legacy mappings to SQLite. Backup: $backup"
+}
+
+ensure_db_ready() {
+  # Central preflight for every command that touches persistence.
+  ensure_store
+  require_sqlite
+  migrate_legacy_db
+  init_schema
 }
 
 validate_key() {
@@ -78,35 +194,20 @@ validate_key() {
   fi
 }
 
-validate_db() {
-  ensure_store
-  local line_no=0
-  local line key
-  while IFS= read -r line || [[ -n "$line" ]]; do
-    ((line_no += 1))
-    [[ -z "$line" ]] && continue
-    if [[ "$line" != *"|"* ]]; then
-      error "Corrupted DB: missing delimiter on line $line_no."
-      return 1
-    fi
-    key="${line%%|*}"
-    if [[ -z "$key" ]]; then
-      error "Corrupted DB: empty key on line $line_no."
-      return 1
-    fi
-  done <"$DB_FILE"
-}
-
 read_value() {
   local key="$1"
-  awk -F'|' -v k="$key" '$1==k{ sub(/^[^|]*\|/, "", $0); print $0; found=1; exit } END{ if(!found) exit 1 }' "$DB_FILE"
-}
-
-write_atomically() {
-  local tmp
-  tmp="$(mktemp "$CONFIG_DIR/.links.db.tmp.XXXXXX")"
-  cat >"$tmp"
-  mv "$tmp" "$DB_FILE"
+  local skey row sep
+  skey="$(sql_escape "$key")"
+  # Prefix the row with a sentinel column so empty-string values are distinguishable from "no row".
+  sep=$'\x1f'
+  if ! row="$(sqlite3 -noheader -separator "$sep" "$DB_FILE" "SELECT 1, value FROM mappings WHERE key='$skey' LIMIT 1;")"; then
+    error "Failed to read mapping for key: $key"
+    return 2
+  fi
+  if [[ -z "$row" ]]; then
+    return 1
+  fi
+  printf '%s\n' "${row#*"$sep"}"
 }
 
 add_mapping() {
@@ -119,21 +220,29 @@ add_mapping() {
     return 1
   fi
 
-  ensure_store
-  validate_db
+  ensure_db_ready
 
-  {
-    awk -F'|' -v k="$key" '$1!=k { print $0 }' "$DB_FILE"
-    printf '%s|%s\n' "$key" "$value"
-  } | write_atomically
+  local skey svalue
+  skey="$(sql_escape "$key")"
+  svalue="$(sql_escape "$value")"
+
+  if ! sqlite3 "$DB_FILE" "INSERT INTO mappings (key, value) VALUES ('$skey', '$svalue') ON CONFLICT(key) DO UPDATE SET value=excluded.value, updated_at=CURRENT_TIMESTAMP;"; then
+    error "Failed to save mapping for key: $key"
+    return 1
+  fi
   success "Saved mapping: $key"
 }
 
 list_mappings() {
-  ensure_store
-  validate_db
+  ensure_db_ready
 
-  if [[ ! -s "$DB_FILE" ]]; then
+  local rows
+  if ! rows="$(sqlite3 -noheader -separator '|' "$DB_FILE" "SELECT key, value FROM mappings ORDER BY key;")"; then
+    error "Failed to list mappings."
+    return 1
+  fi
+
+  if [[ -z "$rows" ]]; then
     info "No mappings stored yet."
     return 0
   fi
@@ -141,26 +250,30 @@ list_mappings() {
   if command -v column >/dev/null 2>&1; then
     {
       printf 'KEY|VALUE\n'
-      cat "$DB_FILE"
+      printf '%s\n' "$rows"
     } | column -t -s '|'
   else
     printf '%-20s %s\n' "KEY" "VALUE"
-    awk -F'|' '{ if (NF>=2) { sub(/^[^|]*\|/, "", $0); printf "%-20s %s\n", $1, $0 } }' "$DB_FILE"
+    printf '%s\n' "$rows" | awk -F'|' '{ if (NF>=2) { sub(/^[^|]*\|/, "", $0); printf "%-20s %s\n", $1, $0 } }'
   fi
 }
 
 remove_mapping() {
   local key="${1:-}"
   validate_key "$key"
-  ensure_store
-  validate_db
+  ensure_db_ready
 
-  if ! awk -F'|' -v k="$key" '$1==k { found=1 } END{ exit(found?0:1) }' "$DB_FILE"; then
+  local skey changes
+  skey="$(sql_escape "$key")"
+  if ! changes="$(sqlite3 -noheader "$DB_FILE" "DELETE FROM mappings WHERE key='$skey'; SELECT changes();")"; then
+    error "Failed to remove mapping: $key"
+    return 1
+  fi
+  if [[ "${changes##*$'\n'}" -eq 0 ]]; then
     error "Key not found: $key"
     return 1
   fi
 
-  awk -F'|' -v k="$key" '$1!=k || $0 !~ /\|/ { print $0 }' "$DB_FILE" | write_atomically
   success "Removed mapping: $key"
 }
 
@@ -183,12 +296,18 @@ open_mapping() {
   local value path
 
   validate_key "$key"
-  ensure_store
-  validate_db
+  ensure_db_ready
 
   if ! value="$(read_value "$key")"; then
-    error "Key not found: $key"
-    return 1
+    case "$?" in
+      1)
+        error "Key not found: $key"
+        return 1
+        ;;
+      *)
+        return 1
+        ;;
+    esac
   fi
 
   if is_url "$value"; then
@@ -202,11 +321,13 @@ open_mapping() {
   fi
 
   path="$(resolve_path "$value")"
+  # Keep directory mappings shell-friendly by printing the path for caller-side `cd`.
   if [[ -d "$path" ]]; then
     printf '%s\n' "$path"
     return 0
   fi
 
+  # Non-URL, non-directory values are treated as shell commands.
   bash -lc "$value"
 }
 
@@ -215,12 +336,18 @@ print_path() {
   local value path
 
   validate_key "$key"
-  ensure_store
-  validate_db
+  ensure_db_ready
 
   if ! value="$(read_value "$key")"; then
-    error "Key not found: $key"
-    return 1
+    case "$?" in
+      1)
+        error "Key not found: $key"
+        return 1
+        ;;
+      *)
+        return 1
+        ;;
+    esac
   fi
 
   path="$(resolve_path "$value")"
@@ -233,8 +360,7 @@ print_path() {
 }
 
 fuzzy_open() {
-  ensure_store
-  validate_db
+  ensure_db_ready
 
   if ! command -v fzf >/dev/null 2>&1; then
     info "fzf is not installed. Install fzf to use fuzzy search."
@@ -242,7 +368,8 @@ fuzzy_open() {
   fi
 
   local key
-  key="$(awk -F'|' 'NF>=2{print $1}' "$DB_FILE" | fzf --prompt='linkdir> ' --height=40% --reverse || true)"
+  # Query keys directly from SQLite to keep completion/fuzzy behavior backend-agnostic.
+  key="$(sqlite3 -noheader "$DB_FILE" "SELECT key FROM mappings ORDER BY key;" | fzf --prompt='linkdir> ' --height=40% --reverse || true)"
   if [[ -z "$key" ]]; then
     return 0
   fi
@@ -251,9 +378,11 @@ fuzzy_open() {
 }
 
 print_keys() {
-  ensure_store
-  validate_db
-  awk -F'|' 'NF>=2{print $1}' "$DB_FILE"
+  ensure_db_ready
+  if ! sqlite3 -noheader "$DB_FILE" "SELECT key FROM mappings ORDER BY key;"; then
+    error "Failed to read keys from database."
+    return 1
+  fi
 }
 
 main() {
