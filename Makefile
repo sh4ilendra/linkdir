@@ -1,8 +1,8 @@
 PREFIX ?= $(HOME)/.local/bin
 BASH_COMPLETION_DIR ?= $(HOME)/.local/share/bash-completion/completions
 BIN_NAME ?= linkdir
-SCRIPT := linkdir
-COMPLETION := linkdir-completion.bash
+SCRIPT := bin/linkdir
+COMPLETION := completions/linkdir-completion.bash
 
 .PHONY: help check install uninstall install-completion uninstall-completion
 
