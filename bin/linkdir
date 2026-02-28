@@ -169,6 +169,27 @@ is_url() {
   [[ "$value" =~ ^https?:// ]]
 }
 
+open_url() {
+  local url="$1"
+
+  if command -v xdg-open >/dev/null 2>&1; then
+    nohup xdg-open "$url" >/dev/null 2>&1 &
+    return 0
+  fi
+
+  if command -v open >/dev/null 2>&1; then
+    nohup open "$url" >/dev/null 2>&1 &
+    return 0
+  fi
+
+  if command -v cmd.exe >/dev/null 2>&1; then
+    nohup cmd.exe /c start "" "$url" >/dev/null 2>&1 &
+    return 0
+  fi
+
+  return 1
+}
+
 resolve_path() {
   local value="$1"
   if [[ "$value" == ~* ]]; then
@@ -192,12 +213,11 @@ open_mapping() {
   fi
 
   if is_url "$value"; then
-    if command -v xdg-open >/dev/null 2>&1; then
-      nohup xdg-open "$value" >/dev/null 2>&1 &
+    if open_url "$value"; then
       success "Opened URL: $value"
       return 0
     fi
-    error "xdg-open not found. Cannot open URL."
+    error "No supported URL opener found (tried: xdg-open, open, cmd.exe)."
     return 1
   fi
 

@@ -2,74 +2,35 @@
 
 `linkdir` is a lightweight Bash bookmark utility for storing and opening shortcuts to URLs, directories, and shell commands.
 
-Mappings are stored as:
+## Platform Support
 
-```text
-key|value
-```
+- Primary: Bash utility for Linux/macOS and Unix-like shells.
+- Windows: supported through wrappers in `platform/windows/` and via Git Bash/WSL.
+- `make install` on Windows is supported in Unix-like environments (Git Bash/MSYS2/WSL), not plain PowerShell/CMD alone.
 
-in:
+Mappings are stored as `key|value` in:
 
-```text
-~/.config/linkdir/links.db
-```
-
-(or `$XDG_CONFIG_HOME/linkdir/links.db` when set).
+- `~/.config/linkdir/links.db`
+- or `$XDG_CONFIG_HOME/linkdir/links.db` when set
 
 ## Features
 
 - Add, overwrite, list, and remove mappings
-- Open URL mappings with `xdg-open` in background
+- Open URL mappings in the background
 - Detect directory mappings and print resolved path
 - Execute command mappings
 - Atomic persistence writes
 - Optional fuzzy open with `fzf`
 - Bash completion for commands and stored keys
 
-## Requirements
-
-- Bash 4+
-- Common CLI tools (`awk`, `grep`, `sed`, `cut`)
-- Optional: `column`, `fzf`, `xdg-open`
-
-## Installation
-
-### With Make (recommended)
-
-```bash
-make check
-make install
-make install-completion
-```
-
-By default this installs to:
-
-- `~/.local/bin/linkdir`
-- `~/.local/share/bash-completion/completions/linkdir`
-
-You can override paths:
-
-```bash
-make install PREFIX="$HOME/bin"
-make install-completion BASH_COMPLETION_DIR="$HOME/.bash_completion.d"
-```
-
-### Manual
-
-1. Make the script executable:
+## Quick Start
 
 ```bash
 chmod +x bin/linkdir
+./bin/linkdir add gh https://github.com
+./bin/linkdir list
+./bin/linkdir open gh
 ```
-
-2. Put it on your `PATH` (example):
-
-```bash
-mkdir -p "$HOME/bin"
-cp bin/linkdir "$HOME/bin/linkdir"
-```
-
-3. Ensure `~/bin` is in `PATH` in your shell profile.
 
 ## Commands
 
@@ -83,46 +44,23 @@ linkdir f
 linkdir help
 ```
 
-## Examples
+## Platform Docs
 
-```bash
-linkdir add gh https://github.com
-linkdir add proj ~/workspace/project
-linkdir add docs "xdg-open https://example.com/docs"
+- Linux/macOS setup: `docs/linux.md`
+- Windows setup (PowerShell/CMD): `docs/windows.md`
 
-linkdir list
-linkdir open gh
-linkdir open docs
+## Project Structure
+
+```text
+bin/                  # main executable
+completions/          # shell completion scripts
+platform/windows/     # Windows launchers
+docs/                 # platform-specific documentation
 ```
-
-## Directory Navigation
-
-A standalone executable cannot change the parent shell's current directory.
-
-Use the helper function below in `.bashrc`:
-
-```bash
-lgo() { cd "$(linkdir path "$1")"; }
-```
-
-Then:
-
-```bash
-lgo proj
-```
-
-## Bash Completion
-
-Source the completion script:
-
-```bash
-source /absolute/path/to/completions/linkdir-completion.bash
-```
-
-To load on every shell startup, add that line to `.bashrc`.
 
 ## Notes
 
 - Keys allow: letters, numbers, `.`, `_`, `-`
 - Re-adding an existing key overwrites it safely
 - `linkdir f` requires `fzf`; otherwise a friendly message is shown
+- URL opening supports Linux (`xdg-open`), macOS (`open`), and Windows (`cmd.exe /c start`)
