@@ -59,14 +59,14 @@ make install-completion BASH_COMPLETION_DIR="$HOME/.bash_completion.d"
 1. Make the script executable:
 
 ```bash
-chmod +x linkdir
+chmod +x bin/linkdir
 ```
 
 2. Put it on your `PATH` (example):
 
 ```bash
 mkdir -p "$HOME/bin"
-cp linkdir "$HOME/bin/linkdir"
+cp bin/linkdir "$HOME/bin/linkdir"
 ```
 
 3. Ensure `~/bin` is in `PATH` in your shell profile.
@@ -116,7 +116,7 @@ lgo proj
 Source the completion script:
 
 ```bash
-source /absolute/path/to/linkdir-completion.bash
+source /absolute/path/to/completions/linkdir-completion.bash
 ```
 
 To load on every shell startup, add that line to `.bashrc`.
