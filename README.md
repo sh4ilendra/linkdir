@@ -19,6 +19,8 @@ Mappings are stored in a local SQLite database at:
 - Transactional SQLite persistence
 - Optional fuzzy open with `fzf`
 - Bash completion for commands and stored keys
+- Automatic migration from legacy `key|value` storage to SQLite (with backup)
+- Command aliases for removal: `remove`, `rm`, `delete`
 
 ## Requirements
 
@@ -74,8 +76,16 @@ linkdir open <key>
 linkdir path <key>
 linkdir list
 linkdir remove <key>
+linkdir rm <key>
+linkdir delete <key>
 linkdir f
 linkdir help
+```
+
+Internal command used by completion:
+
+```bash
+linkdir _keys
 ```
 
 ## Examples
@@ -116,9 +126,16 @@ source /absolute/path/to/completions/linkdir-completion.bash
 
 To load on every shell startup, add that line to `.bashrc`.
 
+Completion supports:
+
+- Commands: `add`, `open`, `path`, `list`, `remove`, `rm`, `delete`, `f`, `help`
+- Dynamic key suggestions for: `open`, `path`, `remove`, `rm`, `delete`
+
 ## Notes
 
 - Keys allow: letters, numbers, `.`, `_`, `-`
 - Re-adding an existing key overwrites it safely
 - `linkdir f` requires `fzf`; otherwise a friendly message is shown
-- Existing legacy `key|value` files are migrated automatically on first run (a timestamped `.bak` backup is kept)
+- Existing legacy `key|value` files are migrated automatically on first run
+- Legacy backups are saved as `links.db.legacy.<YYYYMMDDHHMMSS>.bak`
+- URL detection currently matches `http://` and `https://` mappings
